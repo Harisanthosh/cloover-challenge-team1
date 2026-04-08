@@ -109,21 +109,25 @@ with tab_validate:
             blocks = parse_blocks(cloover_blocks_raw)
             with st.spinner("Running quality checks and enrichment..."):
                 result = enricher.validate_and_enrich(postal_code, product_interest, blocks)
-                st.session_state["enrichment_result"] = result.model_dump()
+                spec = enricher.format_to_io_spec(result)
+                # store both human-facing spec and the internal model dump for existing flows
+                st.session_state["enrichment_result"] = {"spec": spec, "internal": result.model_dump()}
             st.success(f"Enriched & Quality-Checked – score {result.quality_report.overall_score}/100")
 
     result_data = st.session_state.get("enrichment_result")
     if result_data:
-        render_quality(result_data["quality_report"])
+        internal = result_data.get("internal") or {}
+        spec = result_data.get("spec") or {}
+        render_quality(internal.get("quality_report", {}))
         cols = st.columns(2)
         with cols[0]:
-            st.subheader("Enriched JSON")
-            st.json(result_data["enriched_data"])
+            st.subheader("Enriched JSON (spec)")
+            st.json(spec)
         with cols[1]:
-            st.subheader("Quality Report")
-            st.json(result_data["quality_report"])
-            if result_data["quality_report"].get("warnings"):
-                st.warning("\n".join(result_data["quality_report"]["warnings"]))
+            st.subheader("Quality Report (internal)")
+            st.json(internal.get("quality_report", {}))
+            if internal.get("quality_report", {}).get("warnings"):
+                st.warning("\n".join(internal.get("quality_report", {}).get("warnings")))
 
 with tab_kb:
     st.subheader("Knowledge Base")
@@ -137,15 +141,16 @@ with tab_kb:
             st.error("Run validation and enrichment first.")
         else:
             from core.data_enricher import EnrichmentResult, QualityReport
+            internal = result_data.get("internal", {})
 
             result = EnrichmentResult(
-                postal_code=result_data["postal_code"],
-                product_interest=result_data["product_interest"],
-                source_data=result_data["source_data"],
-                enriched_data=result_data["enriched_data"],
-                quality_report=QualityReport(**result_data["quality_report"]),
-                fetched_at=result_data["fetched_at"],
-                cached=result_data.get("cached", False),
+                postal_code=internal.get("postal_code"),
+                product_interest=internal.get("product_interest"),
+                source_data=internal.get("source_data", {}),
+                enriched_data=internal.get("enriched_data", {}),
+                quality_report=QualityReport(**internal.get("quality_report", {})),
+                fetched_at=internal.get("fetched_at"),
+                cached=internal.get("cached", False),
             )
             record = kb.save_enrichment(result, extra_notes="Saved from Streamlit KB update flow.")
             st.success(f"Saved {record.session_id} with quality score {record.quality_score}/100")
@@ -170,15 +175,16 @@ with tab_output:
             st.error("Run Validate & Enrich first.")
         else:
             from core.data_enricher import EnrichmentResult, QualityReport
+            internal = result_data.get("internal", {})
 
             result = EnrichmentResult(
-                postal_code=result_data["postal_code"],
-                product_interest=result_data["product_interest"],
-                source_data=result_data["source_data"],
-                enriched_data=result_data["enriched_data"],
-                quality_report=QualityReport(**result_data["quality_report"]),
-                fetched_at=result_data["fetched_at"],
-                cached=result_data.get("cached", False),
+                postal_code=internal.get("postal_code"),
+                product_interest=internal.get("product_interest"),
+                source_data=internal.get("source_data", {}),
+                enriched_data=internal.get("enriched_data", {}),
+                quality_report=QualityReport(**internal.get("quality_report", {})),
+                fetched_at=internal.get("fetched_at"),
+                cached=internal.get("cached", False),
             )
             record = kb.save_enrichment(result, extra_notes="Auto-saved during briefing generation.")
             kb_payload = result.model_dump()

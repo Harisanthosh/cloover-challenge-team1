@@ -347,4 +347,87 @@ class DataEnricher:
         payload["quality_report"] = result.quality_report.model_dump()
         return payload
 
+    def format_to_io_spec(self, result: EnrichmentResult) -> Dict[str, Any]:
+        """Convert internal EnrichmentResult into the Input/Output JSON specification.
+
+        This produces the structure described in `input_output_spec.md` so downstream
+        components (and the Streamlit UI) can use a stable interchange format.
+        """
+        q = result.quality_report
+        src = result.source_data
+        fetched = src.get("fetched_sources", {})
+        enriched = result.enriched_data
+
+        example_location = None
+        profile = fetched.get("postal_code_profile") or enriched.get("profile")
+        if profile and isinstance(profile, dict):
+            example_location = profile.get("postal_code_trend")
+
+        spec: Dict[str, Any] = {
+            "metadata": {
+                "postal_code": result.postal_code,
+                "product_interest": result.product_interest,
+                "example_location": example_location or "",
+                "generated_at": result.fetched_at,
+                "data_quality_score": q.overall_score,
+                "last_updated": result.fetched_at.split("T")[0] if result.fetched_at else "",
+                "refresh_instructions": "Re-run Enricher with the exact input_parameters above to get fresh data",
+            },
+            "input_parameters": {
+                "postal_code": result.postal_code,
+                "product_interest": result.product_interest,
+                "latitude": profile.get("latitude") if isinstance(profile, dict) else None,
+                "longitude": profile.get("longitude") if isinstance(profile, dict) else None,
+                "cloover_blocks": src.get("cloover_blocks") or None,
+                "refresh_mode": "full",
+            },
+            "always_available": {
+                "postal_code": result.postal_code,
+                "product_interest": result.product_interest,
+                "source": "Cloover installer input (always present)",
+            },
+            "sometimes_available": {},
+            "enriched_open_data": {},
+            "quality_checks": {},
+            "ready_for_llm": {
+                "instruction": "You are SolarSage Coach. Use ONLY the data in this JSON (including exact source_url).",
+            },
+        }
+
+        # sometimes_available from cloover blocks when provided
+        cloover_blocks = src.get("cloover_blocks") or {}
+        if cloover_blocks:
+            # pass-through common expected block names
+            for k in ["customer_profile", "energy_consumption", "existing_assets", "budget_financial_profile", "conversation_history"]:
+                if k in cloover_blocks:
+                    spec["sometimes_available"][k] = cloover_blocks.get(k)
+        else:
+            spec["sometimes_available"]["note"] = "These fields come from CLOOVER_API_KEY when provided. See cloover_blocks."
+
+        # Map open-data fetches into enriched_open_data with reasonable keys
+        pvgis = fetched.get("pvgis") or {}
+        spec["enriched_open_data"]["solar_potential_pvgis"] = {
+            "annual_kwh_per_kwp": pvgis.get("estimated_yield_kwh_kwp_year") or enriched.get("solar", {}).get("yield_kwh_kwp_year"),
+            "monthly_profile_kwh": {},
+            "optimal_config": "derived from PVGIS proxy",
+            "source_url": pvgis.get("source") if isinstance(pvgis, dict) else None,
+            "api_endpoint": "",
+            "note": "PVGIS proxy or postal-code heuristic",
+        }
+
+        spec["enriched_open_data"]["energy_prices_smard"] = fetched.get("smard") or {}
+        spec["enriched_open_data"]["subsidies_kfw_bafa_beg"] = fetched.get("regulatory_notes") or {}
+        spec["enriched_open_data"]["nearby_installations_mastr"] = fetched.get("open_mastr") or {}
+
+        # Quality checks mapping
+        spec["quality_checks"] = {
+            "completeness": q.completeness_score,
+            "freshness": q.freshness_score,
+            "sanity": q.sanity_score,
+            "enrichment_method": "Postal-code averages + conservative defaults applied",
+            "recommendation": "Use ONLY this JSON as context. Never invent numbers.",
+        }
+
+        return spec
+
 
