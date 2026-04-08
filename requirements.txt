@@ -1,0 +1,12 @@
+streamlit>=1.32
+python-dotenv>=1.0
+requests>=2.31
+pandas>=2.2
+pydantic>=2.6
+openai>=1.30
+google-generativeai>=0.7
+langchain>=0.2
+langchain-google-genai>=2.0
+langchain-openai>=0.1
+open-mastr>=1.2
+pypdf>=4.2

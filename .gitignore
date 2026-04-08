@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+knowledge_base/*.json
+knowledge_base/*.md
+!knowledge_base/regulations_knowledge.md
+!knowledge_base/dynamic_enrichments.json
