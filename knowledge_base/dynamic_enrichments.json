@@ -1,3 +1,13 @@
 {
-  "sessions": []
+  "sessions": [
+    {
+      "session_id": "session_20260409_042613",
+      "timestamp": "2026-04-09T04:25:45.995603+00:00",
+      "postal_code": "68159",
+      "product_interest": "solar",
+      "quality_score": 85.4,
+      "markdown_path": "knowledge_base\\session_20260409_042613.md",
+      "json_path": "knowledge_base\\session_20260409_042613.json"
+    }
+  ]
 }

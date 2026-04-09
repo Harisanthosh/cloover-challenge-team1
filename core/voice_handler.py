@@ -43,10 +43,25 @@ class VoiceHandler:
     """
 
     def __init__(self):
-        self.api_key = os.getenv("ELEVENLABS_API_KEY", "")
-        self.voice_id = os.getenv("ELEVENLABS_VOICE_ID", "Rachel")
-        self.model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_turbo_v2_5")
-        self.stt_model = os.getenv("GEMINI_STT_MODEL", "gemini-1.5-flash")
+        self.api_key = self._get_first_env("ELEVENLABS_API_KEY") or ""
+        self.voice_id = self._get_first_env("ELEVENLABS_VOICE_ID", "ELEVENLABS_VOICE") or "Rachel"
+        self.model_id = self._get_first_env("ELEVENLABS_MODEL_ID", "ELEVENLABS_MODEL") or "eleven_turbo_v2_5"
+        self.stt_model = self._get_first_env("ELEVENLABS_STT_MODEL_ID", "ELEVENLABS_STT_MODEL") or "scribe_v1"
+
+    def _get_first_env(self, *names: str) -> Optional[str]:
+        for name in names:
+            value = os.getenv(name)
+            if value:
+                return value
+        return None
+
+    def diagnostics(self) -> Dict[str, Any]:
+        return {
+            "elevenlabs_api_key_configured": bool(self.api_key),
+            "voice_id": self.voice_id,
+            "tts_model_id": self.model_id,
+            "stt_model_id": self.stt_model,
+        }
 
     # ----------------------------- Session --------------------------------
     def create_session(
@@ -148,6 +163,17 @@ class VoiceHandler:
         )
 
     def _build_llm(self):
+        if os.getenv("ANTHROPIC_API_KEY"):
+            try:
+                from langchain_anthropic import ChatAnthropic
+
+                return ChatAnthropic(
+                    model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+                    temperature=0.2,
+                    api_key=os.getenv("ANTHROPIC_API_KEY"),
+                )
+            except Exception:
+                return None
         if os.getenv("GEMINI_API_KEY"):
             try:
                 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -155,19 +181,40 @@ class VoiceHandler:
                 return ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0.2)
             except Exception:
                 return None
-        if os.getenv("Z_AI_API_KEY"):
+        if os.getenv("Z_AI_API_KEY") or os.getenv("ZAI_API_KEY"):
             try:
                 from langchain_openai import ChatOpenAI
 
                 return ChatOpenAI(
-                    model="glm-4.5",
+                    model=os.getenv("Z_AI_MODEL", "zai-org/GLM-5.1"),
                     temperature=0.2,
-                    api_key=os.getenv("Z_AI_API_KEY"),
-                    base_url="https://api.z.ai/api/paas/v4/",
+                    api_key=self._get_first_env("Z_AI_API_KEY", "ZAI_API_KEY"),
+                    base_url=os.getenv("Z_AI_BASE_URL", "https://api.featherless.ai/v1"),
                 )
             except Exception:
                 return None
         return None
+
+    # ----------------------------- STT -----------------------------------
+    def transcribe_audio(self, audio_bytes: bytes, mime_type: str = "audio/wav", filename: str = "microphone.wav") -> str:
+        if not self.api_key:
+            raise RuntimeError("ELEVENLABS_API_KEY is not configured.")
+
+        url = "https://api.elevenlabs.io/v1/speech-to-text"
+        headers = {"xi-api-key": self.api_key}
+        data = {"model_id": self.stt_model}
+        files = {"file": (filename, audio_bytes, mime_type)}
+
+        resp = requests.post(url, headers=headers, data=data, files=files, timeout=120)
+        if not resp.ok:
+            raise RuntimeError(f"ElevenLabs STT failed: {resp.status_code} {resp.text[:300]}")
+
+        payload = resp.json()
+        transcript = payload.get("text") or payload.get("transcript") or payload.get("normalized_text") or ""
+        transcript = transcript.strip()
+        if not transcript:
+            raise RuntimeError("ElevenLabs STT returned an empty transcript.")
+        return transcript
 
     # ----------------------------- TTS -----------------------------------
     def synthesize_tts(self, text: str, out_dir: Optional[str] = None) -> Optional[str]:
@@ -176,7 +223,7 @@ class VoiceHandler:
         Returns a local file path if audio was created, otherwise None.
         """
         if not self.api_key:
-            return None
+            raise RuntimeError("ELEVENLABS_API_KEY is not configured.")
 
         target_dir = Path(out_dir or tempfile.gettempdir())
         target_dir.mkdir(parents=True, exist_ok=True)

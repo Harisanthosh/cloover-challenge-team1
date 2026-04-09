@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -31,12 +33,27 @@ PILLAR_TEMPLATE = {
 }
 
 
-load_dotenv()
+load_dotenv(override=True)
 st.set_page_config(page_title=APP_TITLE, page_icon="☀️", layout="wide")
 
 
+def _service_env_fingerprint() -> tuple[str, ...]:
+    return (
+        os.getenv("ANTHROPIC_API_KEY", ""),
+        os.getenv("ANTHROPIC_MODEL", ""),
+        os.getenv("GEMINI_API_KEY", ""),
+        os.getenv("Z_AI_API_KEY", ""),
+        os.getenv("Z_AI_BASE_URL", ""),
+        os.getenv("Z_AI_MODEL", ""),
+        os.getenv("OPENAI_API_KEY", ""),
+        os.getenv("ELEVENLABS_API_KEY", ""),
+        os.getenv("ELEVENLABS_VOICE_ID", ""),
+        os.getenv("ELEVENLABS_MODEL_ID", ""),
+    )
+
+
 @st.cache_resource
-def get_services():
+def get_services(_env_fingerprint: tuple[str, ...]):
     return {
         "enricher": DataEnricher(),
         "kb": KBManager(),
@@ -45,7 +62,7 @@ def get_services():
     }
 
 
-services = get_services()
+services = get_services(_service_env_fingerprint())
 enricher: DataEnricher = services["enricher"]
 kb: KBManager = services["kb"]
 coach: SalesCoach = services["coach"]
@@ -54,6 +71,8 @@ voice: VoiceHandler = services["voice"]
 
 if "enrichment_result" not in st.session_state:
     st.session_state["enrichment_result"] = None
+if "enrichment_result_internal" not in st.session_state:
+    st.session_state["enrichment_result_internal"] = None
 if "briefing" not in st.session_state:
     st.session_state["briefing"] = ""
 if "selected_session" not in st.session_state:
@@ -68,6 +87,16 @@ if "voice_audio_path" not in st.session_state:
     st.session_state["voice_audio_path"] = None
 if "roleplay_input" not in st.session_state:
     st.session_state["roleplay_input"] = ""
+if "voice_last_error" not in st.session_state:
+    st.session_state["voice_last_error"] = ""
+if "coach_response_mode" not in st.session_state:
+    st.session_state["coach_response_mode"] = ""
+if "voice_last_mic_transcript" not in st.session_state:
+    st.session_state["voice_last_mic_transcript"] = ""
+if "voice_last_audio_digest" not in st.session_state:
+    st.session_state["voice_last_audio_digest"] = ""
+if "voice_auto_send_mic" not in st.session_state:
+    st.session_state["voice_auto_send_mic"] = True
 
 
 def quality_badge(score: float) -> str:
@@ -97,7 +126,11 @@ def render_quality(report: Dict[str, Any]) -> None:
 
 
 def current_result_object() -> EnrichmentResult | None:
-    result_data = st.session_state.get("enrichment_result")
+    result_data = st.session_state.get("enrichment_result_internal")
+    if not result_data:
+        legacy = st.session_state.get("enrichment_result")
+        if legacy and isinstance(legacy, dict) and "postal_code" in legacy and "enriched_data" in legacy:
+            result_data = legacy
     if not result_data:
         return None
     return EnrichmentResult(
@@ -109,6 +142,68 @@ def current_result_object() -> EnrichmentResult | None:
         fetched_at=result_data["fetched_at"],
         cached=result_data.get("cached", False),
     )
+
+
+def current_result_spec() -> Dict[str, Any] | None:
+    result_data = st.session_state.get("enrichment_result")
+    if result_data and isinstance(result_data, dict) and "metadata" in result_data and "input_parameters" in result_data:
+        return result_data
+    result = current_result_object()
+    if result is None:
+        return None
+    return enricher.format_to_io_spec(result)
+
+
+def latest_coach_reply(session) -> str:
+    if st.session_state.get("voice_reply"):
+        return st.session_state["voice_reply"]
+    if session:
+        for item in reversed(session.transcript):
+            if item.role == "coach":
+                return item.content
+    return ""
+
+
+def render_autoplay_audio(audio_path: str | None) -> None:
+    if not audio_path:
+        return
+    path = Path(audio_path)
+    if not path.exists():
+        return
+    suffix = path.suffix.lower()
+    mime_type = "audio/mpeg" if suffix == ".mp3" else "audio/wav"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    st.markdown(
+        (
+            f'<audio autoplay controls style="width: 100%;">'
+            f'<source src="data:{mime_type};base64,{encoded}" type="{mime_type}">' 
+            "Your browser does not support audio playback."
+            "</audio>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def handle_roleplay_turn(v_session, result: EnrichmentResult, user_turn: str) -> None:
+    payload = kb_payload_from_result(result)
+    reply = coach.generate_roleplay_reply(payload, user_turn)
+    voice.add_user_turn(v_session, user_turn)
+    voice.add_coach_turn(v_session, reply)
+    st.session_state["voice_reply"] = reply
+    st.session_state["voice_transcript_text"] = voice.render_transcript(v_session.transcript)
+    st.session_state["coach_response_mode"] = getattr(coach, "last_response_mode", "unknown")
+    st.session_state["voice_last_error"] = getattr(coach, "last_model_error", "")
+
+    voice_path = None
+    try:
+        voice_path = voice.synthesize_tts(reply)
+    except Exception as exc:
+        if st.session_state.get("voice_last_error"):
+            st.session_state["voice_last_error"] = f"{st.session_state['voice_last_error']} | TTS: {exc}"
+        else:
+            st.session_state["voice_last_error"] = f"TTS: {exc}"
+        st.warning(f"Coach audio unavailable: {exc}")
+    st.session_state["voice_audio_path"] = voice_path
 
 
 def kb_payload_from_result(result: EnrichmentResult) -> Dict[str, Any]:
@@ -173,21 +268,29 @@ with tab_validate:
             blocks = parse_blocks(cloover_blocks_raw)
             with st.spinner("Running quality checks and enrichment..."):
                 result = enricher.validate_and_enrich(postal_code, product_interest, blocks)
-                st.session_state["enrichment_result"] = result.model_dump()
+                st.session_state["enrichment_result_internal"] = result.model_dump()
+                st.session_state["enrichment_result"] = enricher.format_to_io_spec(result)
             st.success(f"Enriched & Quality-Checked – score {result.quality_report.overall_score}/100")
 
-    result_data = st.session_state.get("enrichment_result")
-    if result_data:
-        render_quality(result_data["quality_report"])
+    result_data = current_result_spec()
+    internal_data = st.session_state.get("enrichment_result_internal")
+    if result_data and internal_data:
+        render_quality(internal_data["quality_report"])
         cols = st.columns(2)
         with cols[0]:
-            st.subheader("Enriched JSON")
-            st.json(result_data["enriched_data"])
+            st.subheader("Enriched JSON (spec format)")
+            st.json(result_data)
+            st.download_button(
+                "Download spec JSON",
+                data=json.dumps(result_data, indent=2),
+                file_name="validated_enriched_output.json",
+                mime="application/json",
+            )
         with cols[1]:
             st.subheader("Quality Report")
-            st.json(result_data["quality_report"])
-            if result_data["quality_report"].get("warnings"):
-                st.warning("\n".join(result_data["quality_report"]["warnings"]))
+            st.json(internal_data["quality_report"])
+            if internal_data["quality_report"].get("warnings"):
+                st.warning("\n".join(internal_data["quality_report"]["warnings"]))
 
 with tab_kb:
     st.subheader("Knowledge Base")
@@ -221,6 +324,15 @@ with tab_voice:
     if not result:
         st.info("Run Validate & Enrich first so voice coaching can stay grounded.")
     else:
+        diagnostics = voice.diagnostics()
+        if diagnostics["elevenlabs_api_key_configured"]:
+            st.caption(
+                f"ElevenLabs ready: voice={diagnostics['voice_id']} | tts_model={diagnostics['tts_model_id']} | stt_model={diagnostics['stt_model_id']}"
+            )
+        else:
+            st.warning("ELEVENLABS_API_KEY is not configured, so microphone transcription and coach voice playback will not work.")
+        st.caption(f"Coach provider detected: {coach.provider}")
+
         if st.button("Start Training Session", type="primary") or st.session_state.get("voice_session") is None:
             st.session_state["voice_session"] = voice.create_session(
                 postal_code=result.postal_code,
@@ -232,13 +344,38 @@ with tab_voice:
             st.session_state["voice_transcript_text"] = ""
             st.session_state["voice_reply"] = ""
             st.session_state["voice_audio_path"] = None
+            st.session_state["voice_last_error"] = ""
+            st.session_state["coach_response_mode"] = ""
             st.success("Training session started.")
 
         v_session = st.session_state["voice_session"]
         st.markdown("### Live transcript")
         transcript_box = st.container(border=True)
         with transcript_box:
-            st.write(voice.render_transcript(v_session.transcript) or "No turns yet.")
+            st.write(st.session_state.get("voice_transcript_text") or voice.render_transcript(v_session.transcript) or "No turns yet.")
+
+        st.markdown("### Use your microphone")
+        mic_audio = st.audio_input("Record a turn as the installer")
+        auto_send_mic = st.toggle("Auto-send each new recording to the coach", key="voice_auto_send_mic")
+        mic_cols = st.columns([1, 2])
+        with mic_cols[0]:
+            mic_send_clicked = st.button("Transcribe Mic to Coach")
+        with mic_cols[1]:
+            if mic_audio is not None:
+                st.audio(mic_audio)
+
+        mic_bytes = mic_audio.getvalue() if mic_audio is not None else None
+        mic_digest = hashlib.sha1(mic_bytes).hexdigest() if mic_bytes else ""
+
+        def process_mic_turn() -> None:
+            transcript = voice.transcribe_audio(
+                mic_bytes,
+                mime_type=getattr(mic_audio, "type", "audio/wav") or "audio/wav",
+                filename=getattr(mic_audio, "name", "microphone.wav"),
+            )
+            st.session_state["voice_last_mic_transcript"] = transcript
+            handle_roleplay_turn(v_session, result, transcript)
+            st.session_state["voice_last_audio_digest"] = mic_digest
 
         st.markdown("### Ask the coach")
         user_turn = st.text_area(
@@ -260,19 +397,31 @@ with tab_voice:
             if not user_turn.strip():
                 st.warning("Enter a line for the installer first.")
             else:
-                payload = kb_payload_from_result(result)
-                reply = coach.generate_roleplay_reply(payload, user_turn)
-                voice.add_user_turn(v_session, user_turn)
-                voice.add_coach_turn(v_session, reply)
-                st.session_state["voice_reply"] = reply
-                st.session_state["voice_transcript_text"] = voice.render_transcript(v_session.transcript)
-                voice_path = None
                 try:
-                    voice_path = voice.synthesize_tts(reply)
+                    handle_roleplay_turn(v_session, result, user_turn)
+                    st.success("Coach reply generated.")
                 except Exception as exc:
-                    st.warning(f"TTS fallback unavailable: {exc}")
-                st.session_state["voice_audio_path"] = voice_path
-                st.success("Coach reply generated.")
+                    st.session_state["voice_last_error"] = str(exc)
+                    st.error(f"Roleplay generation failed: {exc}")
+
+        if mic_send_clicked:
+            if mic_audio is None:
+                st.warning("Record a microphone turn first.")
+            else:
+                try:
+                    process_mic_turn()
+                    st.success("Microphone turn transcribed and sent to coach.")
+                except Exception as exc:
+                    st.session_state["voice_last_error"] = str(exc)
+                    st.error(f"Microphone processing failed: {exc}")
+
+        if auto_send_mic and mic_audio is not None and mic_digest and mic_digest != st.session_state.get("voice_last_audio_digest"):
+            try:
+                process_mic_turn()
+                st.success("Latest microphone recording sent to coach automatically.")
+            except Exception as exc:
+                st.session_state["voice_last_error"] = str(exc)
+                st.error(f"Automatic microphone processing failed: {exc}")
 
         if stop_clicked and v_session:
             v_session.status = "stopped"
@@ -284,10 +433,21 @@ with tab_voice:
                 st.warning(str(exc))
 
         st.markdown("### Coach says")
-        if st.session_state.get("voice_reply"):
-            st.markdown(st.session_state["voice_reply"])
+        coach_reply = latest_coach_reply(v_session)
+        if coach_reply:
+            st.markdown(coach_reply)
         else:
             st.caption("Waiting for the first turn.")
+
+        if st.session_state.get("coach_response_mode"):
+            st.caption(f"Coach reply source: {st.session_state['coach_response_mode']}")
+
+        if st.session_state.get("voice_last_mic_transcript"):
+            st.markdown("### Last microphone transcript")
+            st.code(st.session_state["voice_last_mic_transcript"])
+
+        if st.session_state.get("voice_last_error"):
+            st.caption(f"Last voice error: {st.session_state['voice_last_error']}")
 
         st.markdown("### Three-pillar summary")
         pillar_cols = st.columns(3)
@@ -296,7 +456,20 @@ with tab_voice:
                 st.markdown(f"**{pillar_name}**")
                 st.write(pillar_value["summary"])
 
+        if tts_clicked:
+            if coach_reply:
+                try:
+                    st.session_state["voice_audio_path"] = voice.synthesize_tts(coach_reply)
+                    st.session_state["voice_last_error"] = ""
+                    st.success("Coach voice generated.")
+                except Exception as exc:
+                    st.session_state["voice_last_error"] = str(exc)
+                    st.error(f"Coach voice generation failed: {exc}")
+            else:
+                st.warning("Generate a coach reply first.")
+
         if st.session_state.get("voice_audio_path"):
+            render_autoplay_audio(st.session_state["voice_audio_path"])
             st.audio(st.session_state["voice_audio_path"])
 
         if v_session and v_session.transcript:
