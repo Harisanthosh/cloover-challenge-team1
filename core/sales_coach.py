@@ -201,6 +201,55 @@ class SalesCoach:
                 return self._offline_roleplay_reply(quality, pillars, user_text)
             raise
 
+    def generate_roleplay_opener(self, roleplay_payload: Dict[str, Any]) -> str:
+        self._refresh_model()
+        quality = roleplay_payload.get("quality_report", {})
+        mission = roleplay_payload.get(
+            "mission",
+            "Powering Europe's energy transition. We help solar, heat pump, and wallbox installers sell, finance, and manage clean energy projects — and we help homeowners make the switch to renewables.",
+        )
+        pillars = roleplay_payload.get("pillars", {})
+        kb_json = roleplay_payload.get("kb_json", {})
+
+        if self.model is None:
+            self.last_response_mode = "offline"
+            return self._offline_roleplay_opener(quality, pillars)
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are Cloover's elite sales coach for home-energy installers. Be commercially sharp, direct, practical, and energising. "
+                    "The installer has just opened training mode and needs an immediate pre-call brief. Use the mission, pillars, and KB JSON as ground truth. "
+                    "Do not wait for the installer to say something first. Give a proactive opener that tells them how to frame the conversation and what to focus on first. "
+                    "Keep it crisp, spoken, and useful for a real sales call.",
+                ),
+                (
+                    "user",
+                    "MISSION:\n{mission}\n\nQUALITY SCORE:\n{quality_score}\n\nPILLARS:\n{pillars}\n\nKB JSON:\n{kb_json}\n\nReturn the first coach message in this structure:\nCoach opener:\nWhat to say first:\nWhat to focus on:\nFirst question to ask:",
+                ),
+            ]
+        )
+        chain = prompt | self.model
+        try:
+            response = chain.invoke(
+                {
+                    "mission": mission,
+                    "quality_score": quality.get("overall_score", "unknown"),
+                    "pillars": pillars,
+                    "kb_json": kb_json,
+                }
+            )
+            self.last_response_mode = self.provider
+            self.last_model_error = ""
+            return getattr(response, "content", str(response))
+        except Exception as exc:
+            self.last_model_error = str(exc)
+            if self._is_auth_error(exc):
+                self.last_response_mode = "offline"
+                return self._offline_roleplay_opener(quality, pillars)
+            raise
+
     def _build_model_for(self, provider: str):
         if provider == "anthropic":
             try:
@@ -293,4 +342,15 @@ class SalesCoach:
             f"What to say:\n'Totally fair question. Most homeowners don't buy this because it's cheap upfront, they buy it because it lowers what they pay every month and protects them from rising energy costs. Let me show you the option where the monthly payment stays comfortable and the system still makes financial sense.'\n\n"
             f"Why it works:\nIt acknowledges the concern, reframes financing from debt into cash-flow management, and moves the customer back to outcome instead of price pressure. Use {pillar_zero}, connect it to {pillar_one}, then land it with {pillar_two}.\n\n"
             f"Next question:\nIf the homeowner says, 'I still don't want another monthly payment,' what would you say next in one sentence?"
+        )
+
+    def _offline_roleplay_opener(self, quality: Dict[str, Any], pillars: Dict[str, Any]) -> str:
+        pillar_zero = pillars.get("Pillar 0 — Market & regulatory context", {}).get("summary", "why now in this market")
+        pillar_one = pillars.get("Pillar 1 — The compelling offer", {}).get("summary", "which package fits best")
+        pillar_two = pillars.get("Pillar 2 — The financing strategy", {}).get("summary", "how to make the monthly economics work")
+        return (
+            f"Coach opener:\nYou're live. Set the tone fast and make this feel simple. Your quality-checked context is {quality.get('overall_score', 'n/a')}/100, so lead with certainty.\n\n"
+            f"What to say first:\n'Today I want to help you compare the smartest path to lower your energy costs, use the incentives available to you, and pick an option that fits your home without making the monthly budget uncomfortable.'\n\n"
+            f"What to focus on:\n1. {pillar_zero}\n2. {pillar_one}\n3. {pillar_two}\n\n"
+            f"First question to ask:\n'Before I show you numbers, what matters most to you right now: lower bills, more independence, or keeping the monthly payment predictable?'"
         )

@@ -206,6 +206,59 @@ def handle_roleplay_turn(v_session, result: EnrichmentResult, user_turn: str) ->
     st.session_state["voice_audio_path"] = voice_path
 
 
+def fallback_voice_opener(result: EnrichmentResult) -> str:
+    return (
+        "Coach opener:\n"
+        f"You're walking into a {result.product_interest} conversation in {result.postal_code}. Open with confidence and lead the homeowner from urgency to fit to financing.\n\n"
+        "What to say first:\n"
+        "'Thanks for having me over. I want to show you the cleanest path to lower energy costs, use the available incentives properly, and choose a setup that actually fits how you live.'\n\n"
+        "What to focus on:\n"
+        "1. Pillar 0: Why now in this market and regulatory context.\n"
+        "2. Pillar 1: Which package best fits the home and why.\n"
+        "3. Pillar 2: How to make the monthly economics feel comfortable.\n\n"
+        "First question to ask:\n"
+        "'Before I show you options, what matters most to you right now: lower bills, energy independence, or keeping the monthly payment predictable?'"
+    )
+
+
+def start_voice_training_session(result: EnrichmentResult) -> None:
+    session = voice.create_session(
+        postal_code=result.postal_code,
+        product_interest=result.product_interest,
+        quality_score=result.quality_report.overall_score,
+        mission_text=MISSION_TEXT,
+        pillar_summary=PILLAR_TEMPLATE,
+    )
+    st.session_state["voice_session"] = session
+    st.session_state["voice_last_error"] = ""
+    st.session_state["voice_last_mic_transcript"] = ""
+    st.session_state["voice_last_audio_digest"] = ""
+    st.session_state["roleplay_input"] = ""
+
+    try:
+        opener = coach.generate_roleplay_opener(kb_payload_from_result(result))
+    except Exception as exc:
+        opener = fallback_voice_opener(result)
+        st.session_state["coach_response_mode"] = "offline"
+        st.session_state["voice_last_error"] = str(exc)
+    else:
+        st.session_state["coach_response_mode"] = getattr(coach, "last_response_mode", "unknown")
+        st.session_state["voice_last_error"] = getattr(coach, "last_model_error", "")
+
+    voice.add_coach_turn(session, opener)
+    st.session_state["voice_reply"] = opener
+    st.session_state["voice_transcript_text"] = voice.render_transcript(session.transcript)
+
+    try:
+        st.session_state["voice_audio_path"] = voice.synthesize_tts(opener)
+    except Exception as exc:
+        st.session_state["voice_audio_path"] = None
+        if st.session_state.get("voice_last_error"):
+            st.session_state["voice_last_error"] = f"{st.session_state['voice_last_error']} | TTS: {exc}"
+        else:
+            st.session_state["voice_last_error"] = f"TTS: {exc}"
+
+
 def kb_payload_from_result(result: EnrichmentResult) -> Dict[str, Any]:
     payload = result.model_dump()
     payload["quality_report"] = result.quality_report.model_dump()
@@ -333,20 +386,13 @@ with tab_voice:
             st.warning("ELEVENLABS_API_KEY is not configured, so microphone transcription and coach voice playback will not work.")
         st.caption(f"Coach provider detected: {coach.provider}")
 
-        if st.button("Start Training Session", type="primary") or st.session_state.get("voice_session") is None:
-            st.session_state["voice_session"] = voice.create_session(
-                postal_code=result.postal_code,
-                product_interest=result.product_interest,
-                quality_score=result.quality_report.overall_score,
-                mission_text=MISSION_TEXT,
-                pillar_summary=PILLAR_TEMPLATE,
-            )
-            st.session_state["voice_transcript_text"] = ""
-            st.session_state["voice_reply"] = ""
-            st.session_state["voice_audio_path"] = None
-            st.session_state["voice_last_error"] = ""
-            st.session_state["coach_response_mode"] = ""
-            st.success("Training session started.")
+        start_session_clicked = st.button("Start Training Session", type="primary")
+        if start_session_clicked or st.session_state.get("voice_session") is None:
+            start_voice_training_session(result)
+            if start_session_clicked:
+                st.success("Training session started.")
+            else:
+                st.caption("Coach session primed with an opening talk track.")
 
         v_session = st.session_state["voice_session"]
         st.markdown("### Live transcript")
