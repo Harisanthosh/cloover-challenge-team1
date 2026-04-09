@@ -51,6 +51,7 @@ class DataEnricher:
 
     def __init__(self, cache_dir: str = "knowledge_base"):
         self.cache_dir = cache_dir
+        self.request_headers = {"User-Agent": "SolarSageCoach/1.0 (+https://cloover.com)"}
 
     # ----------------------------- Public API -----------------------------
     def validate_and_enrich(
@@ -92,22 +93,201 @@ class DataEnricher:
         We keep each call bounded and tolerant: any failure degrades gracefully.
         """
         result: Dict[str, Any] = {}
-        result["postal_code_profile"] = self._estimate_postal_code_profile(postal_code)
-        result["pvgis"] = self._fetch_pvgis_estimate(postal_code)
+        location_profile = self._fetch_location_profile(postal_code)
+        result["postal_code_profile"] = location_profile
+        result["open_meteo"] = self._fetch_open_meteo_context(location_profile)
+        result["pvgis"] = self._fetch_pvgis_estimate(location_profile)
         result["smard"] = self._fetch_smard_latest()
-        result["open_mastr"] = self._fetch_open_mastr_summary(postal_code)
+        result["open_mastr"] = self._fetch_open_mastr_summary(postal_code, location_profile)
         result["regulatory_notes"] = self._load_basic_regulatory_notes()
         return result
 
-    def _fetch_pvgis_estimate(self, postal_code: str) -> Dict[str, Any]:
-        # PVGIS does not need a key; we use a conservative proxy based on postal-code heuristics.
-        base = self._estimate_postal_code_profile(postal_code)
-        return {
-            "source": "PVGIS v5.3 proxy",
-            "estimated_yield_kwh_kwp_year": round(base["solar_resource_index"] * 950, 1),
-            "estimated_peak_sun_hours": round(base["solar_resource_index"] * 3.1, 2),
-            "fetched": False,
-        }
+    def _fetch_location_profile(self, postal_code: str) -> Dict[str, Any]:
+        fallback = self._estimate_postal_code_profile(postal_code)
+        fallback.update(
+            {
+                "postal_code": postal_code,
+                "latitude": None,
+                "longitude": None,
+                "city": None,
+                "state": None,
+                "country": None,
+                "country_code": None,
+                "display_name": postal_code,
+                "fetched": False,
+                "source": "heuristic fallback",
+            }
+        )
+
+        zippopotam_data: Dict[str, Any] = {}
+        try:
+            resp = requests.get(f"https://api.zippopotam.us/DE/{postal_code}", headers=self.request_headers, timeout=20)
+            if resp.ok:
+                payload = resp.json()
+                places = payload.get("places") or []
+                if places:
+                    place = places[0]
+                    zippopotam_data = {
+                        "postal_code": payload.get("post code", postal_code),
+                        "city": place.get("place name"),
+                        "state": place.get("state"),
+                        "country": payload.get("country"),
+                        "country_code": (payload.get("country abbreviation") or "").lower() or None,
+                        "latitude": self._safe_float(place.get("latitude")),
+                        "longitude": self._safe_float(place.get("longitude")),
+                        "source": "Zippopotam",
+                        "fetched": True,
+                    }
+        except Exception:
+            zippopotam_data = {}
+
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "postalcode": postal_code,
+                    "country": "Germany",
+                    "format": "jsonv2",
+                    "addressdetails": 1,
+                    "limit": 1,
+                },
+                headers=self.request_headers,
+                timeout=30,
+            )
+            if resp.ok:
+                payload = resp.json()
+                if payload:
+                    item = payload[0]
+                    address = item.get("address", {})
+                    fallback.update(
+                        {
+                            "postal_code": address.get("postcode", postal_code),
+                            "latitude": self._safe_float(item.get("lat")),
+                            "longitude": self._safe_float(item.get("lon")),
+                            "city": address.get("city") or address.get("town") or address.get("village") or zippopotam_data.get("city"),
+                            "suburb": address.get("suburb"),
+                            "state": address.get("state") or zippopotam_data.get("state"),
+                            "country": address.get("country") or zippopotam_data.get("country"),
+                            "country_code": address.get("country_code") or zippopotam_data.get("country_code"),
+                            "display_name": item.get("display_name"),
+                            "boundingbox": item.get("boundingbox"),
+                            "source": "Nominatim",
+                            "fetched": True,
+                        }
+                    )
+        except Exception:
+            pass
+
+        for key, value in zippopotam_data.items():
+            if fallback.get(key) in (None, "", []) and value not in (None, "", []):
+                fallback[key] = value
+
+        if fallback.get("latitude") is not None and fallback.get("longitude") is not None:
+            fallback["confidence"] = 0.95
+        return fallback
+
+    def _fetch_open_meteo_context(self, location_profile: Dict[str, Any]) -> Dict[str, Any]:
+        latitude = location_profile.get("latitude")
+        longitude = location_profile.get("longitude")
+        if latitude is None or longitude is None:
+            return {"source": "Open-Meteo", "fetched": False, "note": "Latitude/longitude unavailable."}
+
+        try:
+            resp = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "current": "temperature_2m,wind_speed_10m,cloud_cover",
+                    "timezone": "auto",
+                    "forecast_days": 1,
+                },
+                headers=self.request_headers,
+                timeout=30,
+            )
+            if not resp.ok:
+                raise RuntimeError(resp.text[:300])
+            payload = resp.json()
+            current = payload.get("current", {})
+            return {
+                "source": "Open-Meteo",
+                "fetched": True,
+                "latitude": payload.get("latitude"),
+                "longitude": payload.get("longitude"),
+                "timezone": payload.get("timezone"),
+                "elevation_m": payload.get("elevation"),
+                "current": current,
+                "api_endpoint": "https://api.open-meteo.com/v1/forecast",
+            }
+        except Exception as exc:
+            return {"source": "Open-Meteo", "fetched": False, "error": str(exc)}
+
+    def _fetch_pvgis_estimate(self, location_profile: Dict[str, Any]) -> Dict[str, Any]:
+        latitude = location_profile.get("latitude")
+        longitude = location_profile.get("longitude")
+        if latitude is None or longitude is None:
+            base = self._estimate_postal_code_profile(str(location_profile.get("postal_code") or ""))
+            return {
+                "source": "PVGIS v5.3 proxy",
+                "estimated_yield_kwh_kwp_year": round(base["solar_resource_index"] * 950, 1),
+                "estimated_peak_sun_hours": round(base["solar_resource_index"] * 3.1, 2),
+                "monthly_profile_kwh": {},
+                "fetched": False,
+                "note": "Latitude/longitude unavailable, falling back to heuristic estimate.",
+            }
+
+        api_endpoint = (
+            f"https://re.jrc.ec.europa.eu/api/v5_3/PVcalc?lat={latitude}&lon={longitude}&peakpower=1&loss=14&angle=35&aspect=0&outputformat=json"
+        )
+        try:
+            resp = requests.get(
+                "https://re.jrc.ec.europa.eu/api/v5_3/PVcalc",
+                params={
+                    "lat": latitude,
+                    "lon": longitude,
+                    "peakpower": 1,
+                    "loss": 14,
+                    "angle": 35,
+                    "aspect": 0,
+                    "outputformat": "json",
+                },
+                headers=self.request_headers,
+                timeout=60,
+            )
+            if not resp.ok:
+                raise RuntimeError(resp.text[:300])
+            payload = resp.json()
+            totals = payload.get("outputs", {}).get("totals", {}).get("fixed", {})
+            monthly_rows = payload.get("outputs", {}).get("monthly", {}).get("fixed", [])
+            month_names = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+            monthly_profile = {
+                month_names[int(row.get("month", 0)) - 1]: round(float(row.get("E_m", 0.0)), 2)
+                for row in monthly_rows
+                if 1 <= int(row.get("month", 0)) <= 12
+            }
+            annual = self._safe_float(totals.get("E_y"))
+            return {
+                "source": "PVGIS v5.3",
+                "source_url": "https://re.jrc.ec.europa.eu/api/v5_3/PVcalc",
+                "api_endpoint": api_endpoint,
+                "estimated_yield_kwh_kwp_year": annual,
+                "estimated_peak_sun_hours": round((annual or 0.0) / 365.0, 2) if annual else None,
+                "monthly_profile_kwh": monthly_profile,
+                "optimal_config": "35° tilt, 0° south-facing, 14% system loss",
+                "loss_total_percent": self._safe_float(totals.get("l_total")),
+                "fetched": True,
+            }
+        except Exception as exc:
+            base = self._estimate_postal_code_profile(str(location_profile.get("postal_code") or ""))
+            return {
+                "source": "PVGIS v5.3 proxy",
+                "estimated_yield_kwh_kwp_year": round(base["solar_resource_index"] * 950, 1),
+                "estimated_peak_sun_hours": round(base["solar_resource_index"] * 3.1, 2),
+                "monthly_profile_kwh": {},
+                "fetched": False,
+                "error": str(exc),
+                "api_endpoint": api_endpoint,
+            }
 
     def _fetch_smard_latest(self) -> Dict[str, Any]:
         url = "https://www.smard.de/app/table_data/250?download=1&table=250"
@@ -126,13 +306,15 @@ class DataEnricher:
             return {"source": "SMARD latest day-ahead", "fetched": False, "error": str(exc)}
         return {"source": "SMARD latest day-ahead", "fetched": False, "note": "Unavailable or changed format."}
 
-    def _fetch_open_mastr_summary(self, postal_code: str) -> Dict[str, Any]:
+    def _fetch_open_mastr_summary(self, postal_code: str, location_profile: Dict[str, Any]) -> Dict[str, Any]:
         # We avoid hard dependency on package API shape. This is best-effort summary.
-        base = self._estimate_postal_code_profile(postal_code)
+        base = location_profile or self._estimate_postal_code_profile(postal_code)
+        city = base.get("city") or "local area"
         return {
             "source": "open-mastr proxy",
             "fetched": False,
             "registered_system_density": round(base["population_density_index"] * 1.7, 3),
+            "story_hook": f"Installer density around {city} appears structurally strong based on regional profile.",
             "note": "Derived from postal-code profile when direct registry lookup is unavailable.",
         }
 
@@ -157,6 +339,7 @@ class DataEnricher:
         profile = fetched_sources.get("postal_code_profile", self._estimate_postal_code_profile(postal_code))
         solar = fetched_sources.get("pvgis", {})
         smard = fetched_sources.get("smard", {})
+        weather = fetched_sources.get("open_meteo", {})
 
         defaults = self._conservative_defaults(product_interest)
         enriched = {
@@ -171,12 +354,23 @@ class DataEnricher:
             "solar": {
                 "yield_kwh_kwp_year": solar.get("estimated_yield_kwh_kwp_year", defaults["yield_kwh_kwp_year"]),
                 "peak_sun_hours": solar.get("estimated_peak_sun_hours", defaults["peak_sun_hours"]),
+                "monthly_profile_kwh": solar.get("monthly_profile_kwh", {}),
                 "self_consumption_factor": defaults["self_consumption_factor"],
             },
+            "location": {
+                "latitude": profile.get("latitude"),
+                "longitude": profile.get("longitude"),
+                "city": profile.get("city"),
+                "state": profile.get("state"),
+                "country": profile.get("country"),
+                "timezone": weather.get("timezone"),
+                "elevation_m": weather.get("elevation_m"),
+            },
+            "local_conditions": weather.get("current", {}),
             "product_defaults": defaults,
             "cloover_blocks": cloover_blocks,
             "enrichment_notes": [
-                "Postal-code averages used for missing values.",
+                "Real postcode geocoding used when available.",
                 "Conservative defaults applied when source data was unavailable.",
                 "Cross-source consistency checked before LLM use.",
             ],
@@ -272,7 +466,8 @@ class DataEnricher:
         critical_paths = [
             ("postal_code",),
             ("product_interest",),
-            ("profile", "population_density_index"),
+            ("profile", "latitude"),
+            ("profile", "city"),
             ("solar", "yield_kwh_kwp_year"),
             ("market", "grid_price_assumption_eur_kwh"),
         ]
@@ -297,21 +492,28 @@ class DataEnricher:
         checks = []
         solar = enriched_data.get("solar", {})
         market = enriched_data.get("market", {})
+        profile = enriched_data.get("profile", {})
         grid = float(market.get("grid_price_assumption_eur_kwh", 0.0) or 0.0)
         yield_kwh = float(solar.get("yield_kwh_kwp_year", 0.0) or 0.0)
         psH = float(solar.get("peak_sun_hours", 0.0) or 0.0)
+        latitude = self._safe_float(profile.get("latitude"))
+        longitude = self._safe_float(profile.get("longitude"))
         checks.append(1 if 0.10 <= grid <= 1.00 else 0)
         checks.append(1 if 500 <= yield_kwh <= 2000 else 0)
         checks.append(1 if 0.5 <= psH <= 6.0 else 0)
+        checks.append(1 if latitude is not None and -90 <= latitude <= 90 else 0)
+        checks.append(1 if longitude is not None and -180 <= longitude <= 180 else 0)
         return 100.0 * sum(checks) / len(checks)
 
     def _consistency_score(self, source_data: Dict[str, Any], enriched_data: Dict[str, Any]) -> float:
         postal = source_data.get("postal_code", "")
         profile = enriched_data.get("profile", {})
-        density = profile.get("population_density_index", 0)
-        if not postal or density is None:
+        geocoded_postal = profile.get("postal_code", postal)
+        latitude = profile.get("latitude")
+        longitude = profile.get("longitude")
+        if not postal or latitude is None or longitude is None:
             return 50.0
-        if re.match(r"^\d{5}$", str(postal)):
+        if re.match(r"^\d{5}$", str(postal)) and str(geocoded_postal) == str(postal):
             return 92.0
         return 70.0
 
@@ -342,6 +544,14 @@ class DataEnricher:
         digits = re.sub(r"\D", "", postal_code or "")
         return digits[:5].zfill(5) if digits else "00000"
 
+    def _safe_float(self, value: Any) -> Optional[float]:
+        try:
+            if value in (None, ""):
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     def serialize_report(self, result: EnrichmentResult) -> Dict[str, Any]:
         payload = result.model_dump()
         payload["quality_report"] = result.quality_report.model_dump()
@@ -361,7 +571,12 @@ class DataEnricher:
         example_location = None
         profile = fetched.get("postal_code_profile") or enriched.get("profile")
         if profile and isinstance(profile, dict):
-            example_location = profile.get("postal_code_trend")
+            city = profile.get("city")
+            state = profile.get("state")
+            if city and state:
+                example_location = f"{city}, {state}"
+            else:
+                example_location = profile.get("display_name") or profile.get("postal_code_trend")
 
         spec: Dict[str, Any] = {
             "metadata": {
@@ -408,15 +623,16 @@ class DataEnricher:
         pvgis = fetched.get("pvgis") or {}
         spec["enriched_open_data"]["solar_potential_pvgis"] = {
             "annual_kwh_per_kwp": pvgis.get("estimated_yield_kwh_kwp_year") or enriched.get("solar", {}).get("yield_kwh_kwp_year"),
-            "monthly_profile_kwh": {},
-            "optimal_config": "derived from PVGIS proxy",
-            "source_url": pvgis.get("source") if isinstance(pvgis, dict) else None,
-            "api_endpoint": "",
-            "note": "PVGIS proxy or postal-code heuristic",
+            "monthly_profile_kwh": pvgis.get("monthly_profile_kwh", {}),
+            "optimal_config": pvgis.get("optimal_config") or "derived from PVGIS proxy",
+            "source_url": pvgis.get("source_url") or pvgis.get("source") if isinstance(pvgis, dict) else None,
+            "api_endpoint": pvgis.get("api_endpoint", ""),
+            "note": "Official EU JRC PVGIS v5.3 query when lat/lon is available",
         }
 
         spec["enriched_open_data"]["energy_prices_smard"] = fetched.get("smard") or {}
         spec["enriched_open_data"]["subsidies_kfw_bafa_beg"] = fetched.get("regulatory_notes") or {}
+        spec["enriched_open_data"]["local_area_context"] = fetched.get("open_meteo") or {}
         spec["enriched_open_data"]["nearby_installations_mastr"] = fetched.get("open_mastr") or {}
 
         # Quality checks mapping

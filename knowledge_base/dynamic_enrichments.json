@@ -8,6 +8,24 @@
       "quality_score": 85.4,
       "markdown_path": "knowledge_base\\session_20260409_042613.md",
       "json_path": "knowledge_base\\session_20260409_042613.json"
+    },
+    {
+      "session_id": "session_20260409_064644",
+      "timestamp": "2026-04-09T06:45:58.556126+00:00",
+      "postal_code": "68161",
+      "product_interest": "heat-pump",
+      "quality_score": 85.4,
+      "markdown_path": "knowledge_base\\session_20260409_064644.md",
+      "json_path": "knowledge_base\\session_20260409_064644.json"
+    },
+    {
+      "session_id": "session_20260409_073223",
+      "timestamp": "2026-04-09T07:31:27.171362+00:00",
+      "postal_code": "67659",
+      "product_interest": "heat-pump",
+      "quality_score": 98.4,
+      "markdown_path": "knowledge_base\\session_20260409_073223.md",
+      "json_path": "knowledge_base\\session_20260409_073223.json"
     }
   ]
 }
