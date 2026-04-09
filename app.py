@@ -328,8 +328,8 @@ with st.sidebar:
         st.info("No saved KB sessions yet.")
 
 
-tab_input, tab_validate, tab_kb, tab_voice, tab_talk_live = st.tabs(
-    ["Input", "Validate & Enrich", "KB", "Voice Coach Roleplay", "Talk Live to Coach"]
+tab_input, tab_validate, tab_kb, tab_voice, tab_talk_live, tab_output = st.tabs(
+    ["Input", "Validate & Enrich", "KB", "Voice Coach Roleplay", "Talk to GridCoach", "Output"]
 )
 
 with tab_input:
@@ -560,7 +560,8 @@ with tab_voice:
 
 with tab_talk_live:
     render_talk_live_embed()
-    st.markdown("---")
+
+with tab_output:
     st.subheader("Generate Sales Coach Briefing")
     if st.button("Generate Sales Coach Briefing", type="primary"):
         result = current_result_object()
