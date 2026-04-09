@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 from core import DataEnricher, KBManager, SalesCoach
@@ -17,6 +18,10 @@ from core.voice_handler import VoiceHandler
 
 
 APP_TITLE = "Cloover AI Sales Coach – Voice Training for Cloover Installers"
+ELEVENLABS_TALK_TO_URL = (
+    "https://elevenlabs.io/app/talk-to?agent_id=agent_6201knrhdf18fvvtzxbjk0d57c2b"
+    "&branch_id=agtbrch_3901knrhdfwffq5rst0ndg6v3e38"
+)
 MISSION_TEXT = (
     "Powering Europe's energy transition. We help solar, heat pump, and wallbox installers sell, finance, and manage clean energy projects — and we help homeowners make the switch to renewables."
 )
@@ -184,6 +189,32 @@ def render_autoplay_audio(audio_path: str | None) -> None:
     )
 
 
+def render_talk_live_embed() -> None:
+        st.markdown("### Talk Live to GridCoach")
+        st.caption("This GridCoach agent page blocks third-party framing, so it cannot be embedded directly inside Streamlit.")
+        st.link_button("Open GridCoach live coach", ELEVENLABS_TALK_TO_URL, use_container_width=True)
+
+        components.html(
+                f"""
+                <div style=\"border:1px solid rgba(49,51,63,0.2); border-radius:12px; padding:18px; background:#fafafa;\">
+                    <div style=\"font-family:system-ui,sans-serif; color:#111827;\">
+                        <h3 style=\"margin:0 0 10px 0; font-size:1.05rem;\">ElevenLabs live coach</h3>
+                        <p style=\"margin:0 0 12px 0; line-height:1.5;\">
+                            GridCoach sends <code>X-Frame-Options: SAMEORIGIN</code> and a <code>frame-ancestors</code>
+                            policy that blocks embedding this URL in third-party apps. Use the button below to launch the live
+                            talk page in a new tab without browser CORS or frame errors.
+                        </p>
+                        <a href=\"{ELEVENLABS_TALK_TO_URL}\" target=\"_blank\" rel=\"noopener noreferrer\"
+                             style=\"display:inline-block; padding:10px 16px; border-radius:999px; background:#111827; color:white; text-decoration:none; font-weight:600;\">
+                            Launch GridCoach Talk-to Agent
+                        </a>
+                    </div>
+                </div>
+                """,
+                height=220,
+        )
+
+
 def handle_roleplay_turn(v_session, result: EnrichmentResult, user_turn: str) -> None:
     payload = kb_payload_from_result(result)
     reply = coach.generate_roleplay_reply(payload, user_turn)
@@ -297,8 +328,8 @@ with st.sidebar:
         st.info("No saved KB sessions yet.")
 
 
-tab_input, tab_validate, tab_kb, tab_voice, tab_output = st.tabs(
-    ["Input", "Validate & Enrich", "KB", "Voice Coach Roleplay", "Output"]
+tab_input, tab_validate, tab_kb, tab_voice, tab_talk_live = st.tabs(
+    ["Input", "Validate & Enrich", "KB", "Voice Coach Roleplay", "Talk Live to Coach"]
 )
 
 with tab_input:
@@ -527,7 +558,9 @@ with tab_voice:
                 mime="text/markdown",
             )
 
-with tab_output:
+with tab_talk_live:
+    render_talk_live_embed()
+    st.markdown("---")
     st.subheader("Generate Sales Coach Briefing")
     if st.button("Generate Sales Coach Briefing", type="primary"):
         result = current_result_object()
