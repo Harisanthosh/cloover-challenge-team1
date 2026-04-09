@@ -16,7 +16,7 @@ from core.data_enricher import EnrichmentResult, QualityReport
 from core.voice_handler import VoiceHandler
 
 
-APP_TITLE = "SolarSage Coach – Voice Training for Cloover Installers"
+APP_TITLE = "Cloover AI Sales Coach – Voice Training for Cloover Installers"
 MISSION_TEXT = (
     "Powering Europe's energy transition. We help solar, heat pump, and wallbox installers sell, finance, and manage clean energy projects — and we help homeowners make the switch to renewables."
 )
@@ -316,7 +316,7 @@ with tab_kb:
 
     st.markdown("### Download all KB as ZIP")
     zip_bytes = kb.create_zip_bundle()
-    st.download_button("Download all KB as ZIP", data=zip_bytes, file_name="solar_sage_kb.zip", mime="application/zip")
+    st.download_button("Download all KB as ZIP", data=zip_bytes, file_name="cloover_ai_sales_coach_kb.zip", mime="application/zip")
 
 with tab_voice:
     st.subheader("Voice Coach Roleplay")

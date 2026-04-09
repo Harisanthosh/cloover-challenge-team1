@@ -1,6 +1,6 @@
-# SolarSage Coach
+# Cloover AI Sales Coach
 
-AI Sales Co-Pilot for Cloover installers, now with a voice roleplay training mode.
+AI sales co-pilot for Cloover installers, now with a voice roleplay training mode.
 
 ## What it does
 
@@ -16,17 +16,57 @@ AI Sales Co-Pilot for Cloover installers, now with a voice roleplay training mod
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
-# fill in GEMINI_API_KEY or Z_AI_API_KEY
+# fill in ANTHROPIC_API_KEY or another supported provider key
 # optionally fill in ELEVENLABS_API_KEY and CLOOVER_API_KEY
 streamlit run app.py
 ```
 
 ## API provider selection
 
-- If `GEMINI_API_KEY` is set, the app uses Gemini via LangChain.
-- Otherwise, if `Z_AI_API_KEY` is set, it uses Z.AI's OpenAI-compatible endpoint at:
-  `https://api.z.ai/api/paas/v4/`
-- If neither key is present, the app falls back to offline grounded output.
+- If `ANTHROPIC_API_KEY` is set, the app uses Claude Sonnet via LangChain.
+- Otherwise, if `GEMINI_API_KEY` is set, it uses Gemini via LangChain.
+- Otherwise, if `Z_AI_API_KEY` is set, it uses the configured OpenAI-compatible endpoint such as Featherless.
+- If no provider key is present, the app falls back to offline grounded output.
+
+## Docker
+
+Build the container:
+
+```bash
+docker build -t cloover-ai-sales-coach .
+```
+
+Run it:
+
+```bash
+docker run --rm -p 8501:8501 --env-file .env cloover-ai-sales-coach
+```
+
+The app will be available at `http://localhost:8501`.
+
+## Railway
+
+Live app URL:
+
+`https://cloover-challenge-team1-production.up.railway.app`
+
+The current repo is linked to the Railway project `cloover-challenge-team1` and deploys from the included `Dockerfile`.
+
+## Vercel
+
+Vercel is not a good fit for this repository in its current form.
+
+- This app is a long-running Streamlit server.
+- Vercel does not run arbitrary Docker containers for user apps.
+- Vercel serverless functions are request/response oriented and are not suitable for hosting a persistent Streamlit process or a near-realtime voice loop.
+
+If you want to deploy the current app without rewriting the runtime model, use a container-friendly host such as Render, Railway, Fly.io, or Azure App Service.
+
+If you specifically need Vercel, the app would need to be split into:
+
+- a separate frontend for the UI and realtime voice experience
+- API routes or another backend service for enrichment and coaching
+- a non-Streamlit architecture
 
 ## Voice roleplay
 

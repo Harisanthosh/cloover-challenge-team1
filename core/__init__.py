@@ -1,4 +1,4 @@
-"""Core package for SolarSage Coach."""
+"""Core package for Cloover AI Sales Coach."""
 
 from .data_enricher import DataEnricher, EnrichmentResult, QualityReport
 from .kb_manager import KBManager

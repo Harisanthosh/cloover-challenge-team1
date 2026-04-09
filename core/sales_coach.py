@@ -105,7 +105,7 @@ class SalesCoach:
             [
                 (
                     "system",
-                    "You are SolarSage Coach, a grounded sales assistant. Use ONLY the provided quality-checked KB data. "
+                    "You are Cloover AI Sales Coach, a grounded sales assistant. Use ONLY the provided quality-checked KB data. "
                     "Never hallucinate numbers. If a number is not present, say it is unavailable. "
                     "Always cite the quality score and keep the exact 3-pillar output format: Pillar 0 — Market & regulatory context, Pillar 1 — The compelling offer, Pillar 2 — The financing strategy. "
                     "Include Cloover's mission and stay firmly grounded in the knowledge base.",

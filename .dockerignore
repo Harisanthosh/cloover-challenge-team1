@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+.env
+.pytest_cache
+.mypy_cache
+.vscode
+
+knowledge_base/session_*.json
+knowledge_base/session_*.md
+knowledge_base/voice_*.md

@@ -51,7 +51,7 @@ class DataEnricher:
 
     def __init__(self, cache_dir: str = "knowledge_base"):
         self.cache_dir = cache_dir
-        self.request_headers = {"User-Agent": "SolarSageCoach/1.0 (+https://cloover.com)"}
+        self.request_headers = {"User-Agent": "ClooverAISalesCoach/1.0 (+https://cloover.com)"}
 
     # ----------------------------- Public API -----------------------------
     def validate_and_enrich(
@@ -605,7 +605,7 @@ class DataEnricher:
             "enriched_open_data": {},
             "quality_checks": {},
             "ready_for_llm": {
-                "instruction": "You are SolarSage Coach. Use ONLY the data in this JSON (including exact source_url).",
+                "instruction": "You are Cloover AI Sales Coach. Use ONLY the data in this JSON (including exact source_url).",
             },
         }
 

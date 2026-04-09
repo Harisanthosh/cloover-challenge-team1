@@ -38,7 +38,7 @@ class KBManager:
         if not self.regulations_path.exists():
             self.regulations_path.write_text(
                 "# Regulations Knowledge\n\n"
-                "This file stores lightweight reference notes for SolarSage Coach.\n\n"
+                "This file stores lightweight reference notes for Cloover AI Sales Coach.\n\n"
                 "- Always confirm local subsidy and permitting details before quoting\n"
                 "- Use quality-checked data only\n"
                 "- Prefer conservative savings assumptions\n",
@@ -127,7 +127,7 @@ class KBManager:
         qr = payload.get("quality_report", {})
         enriched = payload.get("enriched_data", {})
         lines = [
-            "# SolarSage Coach Session",
+            "# Cloover AI Sales Coach Session",
             "",
             f"- Timestamp: {payload.get('fetched_at')}",
             f"- Postal code: {payload.get('postal_code')}",

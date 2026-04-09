@@ -142,7 +142,7 @@
   },
 
   "ready_for_llm": {
-    "instruction": "You are SolarSage Coach. Use ONLY the data above (including exact source_url). Generate 3-pillar output. Cite sources and quality score."
+    "instruction": "You are Cloover AI Sales Coach. Use ONLY the data above (including exact source_url). Generate 3-pillar output. Cite sources and quality score."
   }
 }
 ```

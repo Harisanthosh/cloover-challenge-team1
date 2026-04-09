@@ -255,7 +255,7 @@ class VoiceHandler:
 
     def transcript_markdown(self, session: VoiceSession) -> str:
         lines = [
-            "# SolarSage Coach Voice Roleplay",
+            "# Cloover AI Sales Coach Voice Roleplay",
             "",
             f"- Session: {session.session_id}",
             f"- Postal code: {session.postal_code}",
